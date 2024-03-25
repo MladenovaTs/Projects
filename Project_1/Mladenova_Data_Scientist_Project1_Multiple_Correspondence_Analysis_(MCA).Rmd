@@ -1,0 +1,255 @@
+---
+title: "Mladenova_Data_Scientist_MCA_Project1"
+author: "Tsvetelina Mladenova"
+date: "`r format(Sys.time(), '%d %b %Y')`"
+output: 
+  BiocStyle::html_document:
+    number_sections: true
+    toc_float: yes
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(knitr)
+library(DT)
+
+
+```
+
+**This data set consists of three types of entities: (a) the specification of an auto in terms of various characteristics, (b) its assigned insurance risk rating, (c) its normalized losses in use as compared to other cars. The second rating corresponds to the degree to which the auto is more risky than its price indicates. Cars are initially assigned a risk factor symbol associated with its price. Then, if it is more risky (or less), this symbol is adjusted by moving it up (or down) the scale. Actuarians call this process "symboling". A value of +3 indicates that the auto is risky, -3 that it is probably pretty safe.**
+
+**The third factor is the relative average loss payment per insured vehicle year. This value is normalized for all autos within a particular size classification (two-door small, station wagons, sports/speciality, etc…), and represents the average loss per car per year.**
+
+```{r libs, eval = T}
+
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(reshape2)
+library(FactoMineR)
+library(factoextra)
+library(corrplot)
+library(caret)
+
+```
+
+
+```{r data loading, eval = T}
+
+# Loading data
+ad <- read.csv("./ad.csv", header=T, sep = ",", fill = T, stringsAsFactors=F, comment.char = "")
+
+head(ad)
+glimpse(ad)
+
+attach(ad)
+
+```
+# ANOVA
+
+<span style="color:blue; font-weight:bold;">The ANOVA analysis will help us to understand whether the variability within groups is similar to the variability between groups. ANOVA allows us to assess the effects of categorical variables on continuous outcomes, providing insights into which factors influence the observed variations in the data. Additionally, ANOVA helps us in identifying which groups differ significantly from each other.</span>
+
+```{r anova 1, eval=T}
+
+# ANOVA
+ad <- lapply(ad, function(x) {
+  if(is.character(x)) {
+    x <- factor(x)
+  }
+  return(x)
+})
+
+ad <- as.data.frame(ad)
+cat_vars <- colnames(ad)[sapply(ad, is.factor)]
+
+ad_aov <- aov(price ~ ., data = ad[, c("price", cat_vars)])
+summary(ad_aov)
+
+```
+
+<span style="color:blue; font-weight:bold;">Variables with non-significant p-values (p > 0.05), such as fuel.type and num.of.doors, may not contribute significantly to the variation, so we will exclude them for the downstream analysis.</span>
+
+```{r filtering, eval = T}
+
+# Filtering
+cat_vars_mca <- cat_vars[!(cat_vars %in% c("fuel.type", "num.of.doors"))]
+cat_vars_anova <- ad[, c("price", cat_vars_mca), drop = FALSE]
+
+attach(cat_vars_anova)
+
+```
+
+
+```{r anova 2, eval = T}
+
+# ANOVA
+ad_aov <- aov(price ~ ., data = cat_vars_anova[, c("price", cat_vars_mca)])
+summary(ad_aov)
+
+```
+
+<span style="color:blue; font-weight:bold;">The significance of the "make" variable highlights its strong impact on price, implying that varying car brands significantly affect pricing. Similarly, the significance of "aspiration" indicates that whether a car features standard aspiration or is turbocharged could also influence its price. Consequently, we will proceed with MCA to unveil patterns in the relationships between the categorical variables.</span>
+
+
+
+# Multiple Correspondence Analysis (MCA)
+
+
+```{r mca 1, eval = T}
+# MCA
+ad_mca <- ad[, cat_vars_mca, drop = FALSE]
+
+res.mca <- MCA(ad_mca, ncp = 5, graph = FALSE)
+res.mca
+
+summary(res.mca)
+
+```
+
+<span style="color:blue; font-weight:bold;">Segmenting variables into groups can facilitate interpretation by directing attention to particular associations within each group. This approach allows us for a more focused analysis of related variables, potentially revealing nuanced patterns and insights that might be overlooked when considering all variables together.</span>
+
+
+```{r groups, eval=T}
+
+# Basic Vehicle Characteristics
+basic_vehicle_df <- ad[, c("make", "body.style", "num.of.cylinders", "fuel.system")]
+
+# Body Style and Location
+body_location_df <- ad[, c("body.style", "engine.location", "drive.wheels")]
+
+# Engine and Aspiration
+engine_aspiration_df <- ad[, c("engine.type", "aspiration")]
+
+```
+
+
+```{r mca 2, eval = T}
+
+# MCA 
+df_list <- list(basic_vehicle_df = basic_vehicle_df,
+                body_location_df = body_location_df,
+                engine_aspiration_df = engine_aspiration_df)
+
+perform_mca <- function(df_list) {
+  mca_results <- list()
+  for (name in names(df_list)) {
+    df <- df_list[[name]]
+    mca_results[[name]] <- MCA(df, graph = FALSE)
+  }
+  return(mca_results)
+}
+
+mca_results <- perform_mca(df_list)
+
+```
+
+
+```{r mca analysis, eval=T}
+
+# MCA Analysis function
+perform_mca_analysis <- function(data_name, mca_results) {
+  cat("Summary of MCA results for", data_name, ":\n")
+  print(summary(mca_results))
+  
+  cat("Eigenvalues plot for", data_name, ":\n")
+  print(fviz_screeplot(mca_results, addlabels = TRUE, ylim = c(0, 45)))
+  
+  cat("Correlation between variables and principal dimensions for", data_name, ":\n")
+  print(fviz_mca_var(mca_results, choice = "mca.cor", 
+               repel = TRUE, 
+               ggtheme = theme_minimal()))
+  
+    cat("Contribution of variable categories for", data_name, ":\n")
+  print(fviz_mca_var(mca_results, col.var = "contrib",
+               gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), 
+               repel = TRUE, # avoid text overlapping (slow)
+               ggtheme = theme_minimal()
+  ))
+  
+    res.desc <- dimdesc(mca_results, axes = c(1,2))
+  cat("Description of dimensions for", data_name, ":\n")
+  print(res.desc[[1]])
+  print(res.desc[[2]])
+}
+
+```
+
+
+
+
+## MCA - Basic Vehicle Characteristics
+
+```{r mca 3, eval = T}
+
+# Perform MCA analysis for basic_vehicle_df
+perform_mca_analysis("basic_vehicle_df", mca_results$basic_vehicle_df)
+
+```
+
+<span style="color:blue; font-weight:bold;">The MCA on the basic vehicle characteristics group reveals that these variables collectively explain some of the variance in the data, even though not much. For example, luxury car manufacturers like Mercedes-Benz tend to cluster together with specific body styles, such as convertibles and hardtops, which are associated with higher-end models. The eigenvalues suggest distinct patterns in how these characteristics are related. Additionally, the contribution of variable categories highlights the importance of certain categories within each variable. For instance, in the context of fuel systems, the presence of multi-point fuel injection (MPFI) appears to have a substantial impact on the clustering of car makes, indicating that this particular fuel system is influential in determining the characteristics of the vehicles. Similarly, within the variable of cylinder numbers, the presence of two cylinders (e.g., in motorcycle engines) stands out as a distinct category that affects the distribution of car makes, suggesting an association between engine type and vehicle make. The results of the one-way ANOVA further elucidate relationships, for example, in the analysis of engine types, we find that certain makes, such as Mazda or Mercedes-Benz, correlate with specific engine types, like rotary engines or inline-six configurations, respectively. These findings underscore the importance of considering categorical variables in understanding the variance within the dataset and highlight the specific categories that contribute most to the observed patterns.</span> 
+
+
+## MCA - Body Style and Location
+
+```{r mca 4, eval = T}
+
+# # Perform MCA analysis for body_location_df
+perform_mca_analysis("body_location_df", mca_results$body_location_df)
+
+```
+
+<span style="color:blue; font-weight:bold;">The MCA results on the body location group reveal that these variables also explain some of the variance in the dataset. For instance, there's an association between certain body styles and their location, with hardtops and convertibles being more likely to have a rear engine location. The presence of rear-wheel drive (RWD) is associated with hardtop body styles, suggesting a preference for certain drivetrain configurations in certain body styles. Similarly, the presence of four-wheel drive (4WD) is strongly associated with wagon body styles, indicating a preference for certain drivetrains in utility-oriented body styles.</span>
+
+
+## MCA - Engine and Aspiration
+
+```{r mca 5, eval = T}
+
+# Perform MCA analysis for engine_aspiration_df
+perform_mca_analysis("engine_aspiration_df", mca_results$engine_aspiration_df)
+
+```
+
+<span style="color:blue; font-weight:bold;">The MCA on the engine aspiration characteristics group reveals that certain engine types, such as "turbo" and "rotor," tend to associate with specific aspiration categories. For example, "turbo" exhibit a distinct clustering pattern, indicating a relationship between this type of aspiration and the engine type. Similarly, the "rotor" engine type, shows a unique distribution concerning aspiration. Furthermore, the presence of turbocharging as an aspiration method influences the clustering of car makes. Likewise, specific engine types, such as "l", demonstrate an impact on the distribution of aspiration categories. The results of the one-way ANOVA indicates an association between the aspiration method and the engine type, with turbocharging correlating with certain engine types.</span> 
+
+
+# Conclusions
+
+<span style="color:blue; font-weight:bold;">In conclusion, the application of multiple correspondence analysis (MCA) sheds light on intricate patterns within the dataset. Through MCA, we discern how various variables collectively contribute to explaining the variance, offering insights into the underlying structure of the data. The analysis unveils associations between luxury car manufacturers and specific body styles, as well as the influence of engine characteristics, such as cylinder numbers and fuel systems, on car make clustering. Moreover, the examination of body location and engine aspiration characteristics reveals further nuances in how certain features align with one another, emphasizing the interconnectedness of automotive attributes.</span> 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
